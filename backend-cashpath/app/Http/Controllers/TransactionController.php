@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Auth;
 use App\Models\Transaction;
 use App\Models\Account;
 use App\Models\Category;
+use App\Models\Budget;
 
 class TransactionController extends Controller
 {
@@ -41,7 +42,6 @@ class TransactionController extends Controller
     // ✅ Create a new transaction
     public function store(Request $request)
     {
-        // ✅ Log incoming request for debugging
         \Log::info('Transaction Create Request:', $request->all());
     
         $validatedData = $request->validate([
@@ -65,12 +65,26 @@ class TransactionController extends Controller
     
         $transaction = $user->transactions()->create($validatedData);
     
+        // ✅ Update spent_amount in budgets if it's an Expense
+        if ($validatedData['type'] === 'Expense' && $validatedData['category_id']) {
+            $budget = Budget::where('user_id', $user->id)
+                ->where('category_id', $validatedData['category_id'])
+                ->where('status', 'Active')
+                ->first();
+    
+            if ($budget) {
+                $budget->spent_amount += $validatedData['amount'];
+                $budget->save();
+            }
+        }
+    
         return response()->json([
             'message' => 'Transaction created successfully.',
             'transaction' => $transaction
         ], 201);
     }
     
+
     // ✅ Get a single transaction
     public function show($id)
     {
@@ -90,37 +104,70 @@ class TransactionController extends Controller
     public function update(Request $request, $id)
     {
         $transaction = Auth::user()->transactions()->find($id);
-
+    
         if (!$transaction) {
             return response()->json(['message' => 'Transaction not found.'], 404);
         }
-
+    
         $validatedData = $request->validate([
             'amount' => 'nullable|numeric',
             'note' => 'nullable|string',
         ]);
-
+    
+        $oldAmount = $transaction->amount;
+    
         $transaction->update($validatedData);
-
+    
+        // ✅ Adjust spent_amount if it's an Expense
+        if ($transaction->type === 'Expense' && $transaction->category_id) {
+            $budget = Budget::where('user_id', Auth::id())
+                ->where('category_id', $transaction->category_id)
+                ->where('status', 'Active')
+                ->first();
+    
+            if ($budget) {
+                $budget->spent_amount -= $oldAmount;
+                $budget->spent_amount += $transaction->amount;
+                $budget->save();
+            }
+        }
+    
         return response()->json([
             'message' => 'Transaction updated successfully.',
             'transaction' => $transaction
         ]);
     }
+    
 
     // ✅ Delete a transaction
     public function destroy($id)
-    {
-        $transaction = Auth::user()->transactions()->find($id);
+{
+    $transaction = Auth::user()->transactions()->find($id);
 
-        if (!$transaction) {
-            return response()->json(['message' => 'Transaction not found.'], 404);
-        }
-
-        $transaction->delete();
-
-        return response()->json(['message' => 'Transaction deleted successfully.']);
+    if (!$transaction) {
+        return response()->json(['message' => 'Transaction not found.'], 404);
     }
+
+    // ✅ Adjust budget spent_amount if it's an Expense
+    if ($transaction->type === 'Expense' && $transaction->category_id) {
+        $budget = Budget::where('user_id', Auth::id())
+            ->where('category_id', $transaction->category_id)
+            ->where('status', 'Active')
+            ->first();
+
+        if ($budget) {
+            $budget->spent_amount -= $transaction->amount;
+            if ($budget->spent_amount < 0) {
+                $budget->spent_amount = 0;
+            }
+            $budget->save();
+        }
+    }
+
+    $transaction->delete();
+
+    return response()->json(['message' => 'Transaction deleted successfully.']);
+}
 
     // ✅ Get transactions for a specific year (Grouped by Month)
     public function getYearlyTransactions($year)
@@ -145,7 +192,7 @@ class TransactionController extends Controller
     public function getMonthlyTransactions($year, $month)
     {
         $user = Auth::user();
-    
+
         // Fetch transactions for the given month and year
         $transactions = $user->transactions()
             ->whereYear('date', $year)
@@ -153,16 +200,16 @@ class TransactionController extends Controller
             ->orderBy('date', 'desc')
             ->with('category')
             ->get();
-    
+
         // Group transactions by day
         $groupedTransactions = $transactions->groupBy(function ($transaction) {
             return \Carbon\Carbon::parse($transaction->date)->format('d');
         });
-    
+
         // Calculate totals
         $totalIncome = $transactions->where('type', 'Income')->sum('amount');
         $totalExpenses = $transactions->where('type', 'Expense')->sum('amount');
-    
+
         return response()->json([
             'message' => "Transactions for $year-$month retrieved successfully.",
             'total_income' => $totalIncome,
@@ -170,7 +217,7 @@ class TransactionController extends Controller
             'transactions' => $groupedTransactions
         ]);
     }
-    
+
 
     // ✅ Get transactions for a specific day
     public function getDailyTransactions($year, $month, $day)
@@ -215,27 +262,80 @@ class TransactionController extends Controller
     {
         // ✅ Get the authenticated user
         $user = Auth::user();
-    
+
         if (!$user) {
             return response()->json(['message' => 'User not authenticated.'], 401);
         }
-    
+
         // ✅ Fetch the user's transactions
         $totalIncome = Transaction::where('user_id', $user->id)
             ->where('type', 'Income')
             ->sum('amount');
-    
+
         $totalExpenses = Transaction::where('user_id', $user->id)
             ->where('type', 'Expense')
             ->sum('amount');
-    
+
         return response()->json([
             'message' => 'Income and expenses retrieved successfully.',
             'total_income' => $totalIncome ?? 0.00,
             'total_expenses' => $totalExpenses ?? 0.00
         ]);
     }
+
+
+    public function getStatisticsByCategory(Request $request)
+    {
+        $userId = auth()->id();
+        $year = $request->input('year', date('Y'));
+        $month = $request->input('month', date('m'));
     
+        $transactions = Transaction::where('user_id', $userId)
+            ->whereYear('date', $year)
+            ->whereMonth('date', $month)
+            ->selectRaw('category_id, type, SUM(amount) as total_amount')
+            ->groupBy('category_id', 'type')
+            ->with('category')
+            ->get();
+    
+        if ($transactions->isEmpty()) {
+            return response()->json([
+                'message' => 'No transactions found for the given month.',
+                'total_income' => 0,
+                'total_expenses' => 0,
+                'income_categories' => [],
+                'expense_categories' => []
+            ]);
+        }
+    
+        $totalIncome = $transactions->where('type', 'Income')->sum('total_amount');
+        $totalExpenses = $transactions->where('type', 'Expense')->sum('total_amount');
+    
+        $incomeCategories = $transactions->where('type', 'Income')->map(function ($transaction) use ($totalIncome) {
+            return [
+                'name' => $transaction->category->name ?? 'Unknown',
+                'amount' => round($transaction->total_amount, 2),
+                'percentage' => $totalIncome > 0 ? round(($transaction->total_amount / $totalIncome) * 100, 1) : 0,
+            ];
+        });
+    
+        $expenseCategories = $transactions->where('type', 'Expense')->map(function ($transaction) use ($totalExpenses) {
+            return [
+                'name' => $transaction->category->name ?? 'Unknown',
+                'amount' => round($transaction->total_amount, 2),
+                'percentage' => $totalExpenses > 0 ? round(($transaction->total_amount / $totalExpenses) * 100, 1) : 0,
+            ];
+        });
+    
+        return response()->json([
+            'total_income' => round($totalIncome, 2),
+            'total_expenses' => round($totalExpenses, 2),
+            'income_categories' => $incomeCategories,
+            'expense_categories' => $expenseCategories
+        ]);
+    }
+    
+
 
     // ✅ Get transactions filtered by description
     public function getTransactionsByDescription(Request $request)
