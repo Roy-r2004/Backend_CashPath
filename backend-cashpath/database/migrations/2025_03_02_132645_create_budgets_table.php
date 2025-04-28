@@ -9,13 +9,14 @@ return new class extends Migration {
         Schema::create('budgets', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->uuid('user_id');
-            $table->uuid('category_id');
-            $table->decimal('amount', 12, 2);
-            $table->enum('period', ['Monthly', 'Weekly', 'Custom']);
+            $table->uuid('category_id')->nullable(); // Nullable for automatic budgets
+            $table->decimal('amount', 12, 2)->default(0);
+            $table->enum('mode', ['Manual', 'Automatic'])->default('Manual'); // New
+            $table->enum('period', ['Monthly', 'Weekly', 'Custom'])->default('Monthly');
             $table->date('start_date');
             $table->date('end_date')->nullable();
             $table->decimal('spent_amount', 12, 2)->default(0);
-            $table->enum('status', ['Active', 'Expired']);
+            $table->enum('status', ['Active', 'Expired'])->default('Active');
             $table->timestamps();
 
             $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');

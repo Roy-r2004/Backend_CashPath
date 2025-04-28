@@ -6,6 +6,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\TransactionController;
 use App\Http\Controllers\CategoryController;
+use App\Http\Controllers\BudgetController;
 
 
 Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
@@ -37,6 +38,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/accounts/balance/total', [AccountController::class, 'totalBalance']); // Get total balance
     Route::patch('/accounts/{id}/set-default', [AccountController::class, 'setDefault']); // Set default account
 });
+
+Route::middleware('auth:sanctum')->get('/transactions/statistics', [TransactionController::class, 'getStatisticsByCategory']);
 
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -73,4 +76,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/categories/{id}', [CategoryController::class, 'update']); // Update category
     Route::delete('/categories/{id}', [CategoryController::class, 'destroy']); // Delete category
     Route::get('/categories/{id}/subcategories', [CategoryController::class, 'subcategories']); // Get subcategories
+});
+
+Route::middleware('auth:sanctum')->prefix('budgets')->group(function () {
+    Route::post('/create', [BudgetController::class, 'createBudget']);
+    Route::post('/auto-allocate', [BudgetController::class, 'autoAllocate']);
+    Route::get('/', [BudgetController::class, 'getBudgets']);
+    Route::put('/{id}', [BudgetController::class, 'updateBudget']);
+    Route::delete('/{id}', [BudgetController::class, 'deleteBudget']);
+    Route::get('/summary', [BudgetController::class, 'getBudgetSummary']);
 });
